@@ -1,0 +1,176 @@
+#include <iostream>
+#include <random>
+#include <chrono>
+#include <fstream>
+#include <vector>
+using namespace std;
+
+enum class ArrayType { Random, Reversed, AlmostSorted };
+void insertion_sort(vector<long long>& a, int l, int r) {
+    for (int i = l + 1; i < r; ++i) {
+        long long key = a[i];
+        int j = i - 1;
+        while (j >= l && a[j] > key) {
+            a[j + 1] = a[j];
+            --j;
+        }
+        a[j + 1] = key;
+    }
+}
+
+void merge_sort_rec(vector<long long>& a, vector<long long>& tmp, int l, int r) {
+    if (r - l <= 1) return;
+    int m = l + (r - l) / 2;
+    merge_sort_rec(a, tmp, l, m);
+    merge_sort_rec(a, tmp, m, r);
+    int i = l, j = m, k = l;
+    while (i < m && j < r) {
+        if (a[i] <= a[j]) tmp[k++] = a[i++];
+        else tmp[k++] = a[j++];
+    }
+    while (i < m) tmp[k++] = a[i++];
+    while (j < r) tmp[k++] = a[j++];
+    for (int t = l; t < r; ++t) a[t] = tmp[t];
+}
+
+void hybrid_merge_sort_rec(vector<long long>& a,
+                           vector<long long>& tmp,
+                           int l, int r,
+                           int threshold) {
+    int len = r - l;
+    if (len <= 1) return;
+    if (len <= threshold) {
+        insertion_sort(a, l, r);
+        return;
+    }
+    int m = l + len / 2;
+    hybrid_merge_sort_rec(a, tmp, l, m, threshold);
+    hybrid_merge_sort_rec(a, tmp, m, r, threshold);
+    int i = l, j = m, k = l;
+    while (i < m && j < r) {
+        if (a[i] <= a[j]) tmp[k++] = a[i++];
+        else tmp[k++] = a[j++];
+    }
+    while (i < m) tmp[k++] = a[i++];
+    while (j < r) tmp[k++] = a[j++];
+    for (int t = l; t < r; ++t) a[t] = tmp[t];
+}
+
+class ArrayGenerator {
+    mt19937_64 rng;
+    vector<long long> base_random;
+    vector<long long> base_reversed;
+    vector<long long> base_almost;
+
+public:
+    ArrayGenerator(int max_n = 100000,
+                   long long lo = 0,
+                   long long hi = 10000) {
+        rng.seed(random_device{}());
+        uniform_int_distribution<long long> dist(lo, hi);
+        base_random.resize(max_n);
+        for (int i = 0; i < max_n; ++i) base_random[i] = dist(rng);
+
+        base_reversed = base_random;
+        sort(base_reversed.begin(), base_reversed.end(), greater<long long>());
+
+        base_almost = base_random;
+        sort(base_almost.begin(), base_almost.end());
+        int swaps = static_cast<int>(0.05 * max_n);
+        if (swaps < 1) swaps = 1;
+        uniform_int_distribution<int> pos(0, max_n - 1);
+        for (int i = 0; i < swaps; ++i) {
+            int x = pos(rng);
+            int y = pos(rng);
+            swap(base_almost[x], base_almost[y]);
+        }
+    }
+
+    vector<long long> get_array(int n, ArrayType type) {
+        const vector<long long>* src;
+        if (type == ArrayType::Random) src = &base_random;
+        else if (type == ArrayType::Reversed) src = &base_reversed;
+        else src = &base_almost;
+        int max_start = static_cast<int>(src->size()) - n;
+        uniform_int_distribution<int> start_dist(0, max_start);
+        int start = start_dist(rng);
+        return vector<long long>(src->begin() + start,
+                                 src->begin() + start + n);
+    }
+};
+
+class SortTester {
+    ArrayGenerator& gen;
+    int trials;
+    long long measure_once(vector<long long> a,
+                           int threshold) {
+        int n = static_cast<int>(a.size());
+        vector<long long> tmp(n);
+        auto start = chrono::high_resolution_clock::now();
+        if (threshold == 0) {
+            merge_sort_rec(a, tmp, 0, n);
+        } else {
+            hybrid_merge_sort_rec(a, tmp, 0, n, threshold);
+        }
+        auto elapsed = chrono::high_resolution_clock::now() - start;
+        return chrono::duration_cast<chrono::microseconds>(elapsed).count();
+    }
+
+public:
+    SortTester(ArrayGenerator& g, int trials_)
+        : gen(g), trials(trials_) {}
+
+    long long measure(int n, ArrayType type, int threshold) {
+        long long sum = 0;
+        for (int t = 0; t < trials; ++t) {
+            auto a = gen.get_array(n, type);
+            sum += measure_once(a, threshold);
+        }
+        return sum / trials;
+    }
+};
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+    ArrayGenerator gen;
+    int trials = 500;
+    SortTester tester(gen, trials);
+    vector<int> thresholds = {0, 5, 10, 15, 30, 50};
+    int n_min = 500;
+    int n_max = 10000;
+    int step = 100;
+
+    for (int thr : thresholds) {
+        string filename = "threshold_" + to_string(thr) + ".csv";
+        ofstream out(filename);
+        out << "Размер массива,Рандомные числа,Отсортированы по невозрастанию,Почти отсортированный массив\n";
+        for (int n = n_min; n <= n_max; n += step) {
+            long long t_random = tester.measure(n, ArrayType::Random, thr);
+            long long t_reversed = tester.measure(n, ArrayType::Reversed, thr);
+            long long t_almost = tester.measure(n, ArrayType::AlmostSorted, thr);
+            out << n << "," << t_random << "," << t_reversed << "," << t_almost << "\n";
+        }
+        out.close();
+    }
+
+    {
+        string filename = "help_list.csv";
+        ofstream out(filename);
+        out << "Размер массива,30,50,100,125,170\n";
+        int n_min2 = 500;
+        int n_max2 = 10000;
+        int step2 = 100;
+        vector<int> thr_extra = {30, 50, 100, 125, 170};
+        for (int n = n_min2; n <= n_max2; n += step2) {
+            out << n;
+            for (int thr : thr_extra) {
+                long long t_random = tester.measure(n, ArrayType::Random, thr);
+                out << "," << t_random;
+            }
+            out << "\n";
+        }
+        out.close();
+    }
+    return 0;
+}
